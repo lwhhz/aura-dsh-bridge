@@ -22,12 +22,34 @@ import { Bonjour } from "bonjour-service";
 const PORT = Number(process.env.PORT ?? 8765);
 const SECURITY_MODE = process.env.SECURITY_MODE === "token" ? "token" : "code";
 const CODE_TTL = Number(process.env.CODE_TTL ?? 120);
-const DSH_URL = new URL(process.env.DSH_URL ?? "http://127.0.0.1:8187");
+const DSH_URL_RAW = process.env.DSH_URL ?? "http://127.0.0.1:8187";
+const DSH_URL_AUTO = DSH_URL_RAW.toLowerCase() === "auto";
+const DSH_URL = new URL(DSH_URL_AUTO ? "http://127.0.0.1:8187" : DSH_URL_RAW);
 const SERVICE_NAME = process.env.SERVICE_NAME ?? "DSH Desktop";
 const DSH_AUTH_URL = process.env.DSH_AUTH_URL ?? "";
 const TOKEN_FILE = process.env.TOKEN_FILE ?? join(homedir(), ".aura-dsh-bridge", "token");
-const DSH_HOST = DSH_URL.hostname;
-const DSH_PORT = Number(DSH_URL.port || 80);
+let DSH_HOST = DSH_URL.hostname;
+let DSH_PORT = Number(DSH_URL.port || 80);
+
+/** 探测本机 DSH：优先找加载了 aura-bridge 插件的端口（8187..8820）。 */
+async function detectDshPort() {
+  if (!DSH_URL_AUTO) return;
+  for (let port = 8187; port <= 8820; port++) {
+    try {
+      const res = await fetch("http://127.0.0.1:" + port + "/aura/health", { signal: AbortSignal.timeout(150) });
+      if (res.ok) {
+        const body = await res.json().catch(() => ({}));
+        if (body.plugin === "aura-bridge") {
+          DSH_PORT = port;
+          console.log("[dsh] 自动发现插件端口 " + port);
+          return;
+        }
+      }
+    } catch {}
+  }
+  console.log("[dsh] 未发现 aura-bridge，使用默认 8187");
+  DSH_PORT = 8187;
+}
 
 mkdirSync(dirname(TOKEN_FILE), { recursive: true });
 let token = "";
@@ -152,6 +174,17 @@ const server = createServer(async (req, res) => {
   if (path === "/aura/pair/status") {
     return json(res, 200, { mode: SECURITY_MODE, code: SECURITY_MODE === "code" ? currentCode() : undefined, expiresIn: Math.max(0, Math.floor((codeExpiresAt - Date.now()) / 1000)), port: PORT });
   }
+  if (path === "/aura/sessions") {
+    try {
+      const upstream = await fetch("http://127.0.0.1:" + DSH_PORT + "/aura/sessions", { signal: AbortSignal.timeout(3000) });
+      const body = await upstream.text();
+      res.writeHead(upstream.status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      res.end(body);
+    } catch (error) {
+      json(res, 502, { error: "dsh_plugin_unreachable", detail: String(error) });
+    }
+    return;
+  }
   if (path === "/aura/pair/verify" && req.method === "POST") {
     const body = await readBody(req);
     let input = req.headers["x-aura-code"] ?? "";
@@ -192,6 +225,7 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 server.listen(PORT, "0.0.0.0", async () => {
+  await detectDshPort();
   if (DSH_AUTH_URL) await authenticate();
   const bonjour = new Bonjour();
   try { bonjour.publish({
@@ -199,12 +233,12 @@ server.listen(PORT, "0.0.0.0", async () => {
     type: "dsh",
     port: PORT,
     host: process.env.MDNS_HOST ?? "aura-dsh.local",
-    txt: { mode: SECURITY_MODE, path: "/aura/pair", version: "1" },
+    txt: { mode: SECURITY_MODE, path: "/aura/pair", version: "1", dsh: String(DSH_PORT) },
   }); } catch (error) { console.error("[mdns] 发布失败（可能有同名实例）：", error instanceof Error ? error.message : error); }
   // UDP 广播兜底：部分 Windows/Android 组合的 mDNS 会被防火墙挡住
   const beacon = createSocket({ type: "udp4", reuseAddr: true });
   beacon.bind(() => beacon.setBroadcast(true));
-  const payload = Buffer.from(JSON.stringify({ name: SERVICE_NAME, port: PORT, mode: SECURITY_MODE, version: 1 }));
+  const payload = Buffer.from(JSON.stringify({ name: SERVICE_NAME, port: PORT, mode: SECURITY_MODE, version: 1, dsh: DSH_PORT }));
   const targets = (process.env.BEACON_TARGETS ?? "255.255.255.255,192.168.1.255").split(",").map((s) => s.trim()).filter(Boolean);
   setInterval(() => {
     for (const target of targets) {
