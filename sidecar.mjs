@@ -304,6 +304,14 @@ server.on("upgrade", (req, socket, head) => {
   socket.on("error", () => target.destroy());
 });
 
+server.on("error", (error) => {
+  if (error && error.code === "EADDRINUSE") {
+    console.log("[bridge] 端口 " + PORT + " 已被占用，已有实例在运行，退出");
+    process.exit(0);
+  }
+  console.error("[bridge] 启动失败:", error);
+  process.exit(1);
+});
 server.listen(PORT, "0.0.0.0", async () => {
   await detectDshPort();
   if (DSH_AUTH_URL) await authenticate();
