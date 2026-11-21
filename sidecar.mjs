@@ -47,6 +47,28 @@ async function detectDshPort() {
       }
     } catch {}
   }
+  // 桌面端端口可能落在 8820 之外：从系统监听端口里探测
+  try {
+    const { execFileSync } = await import("node:child_process");
+    const out = execFileSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8", windowsHide: true });
+    const ports = [...new Set([...out.matchAll(/127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING/gi)].map((m) => Number(m[1])))]
+      .filter((port) => port >= 1024 && port !== PORT);
+    console.log("[dsh] 候选监听端口 " + ports.length + " 个");
+    for (const port of ports) {
+      try {
+        const res = await fetch("http://127.0.0.1:" + port + "/aura/health", { signal: AbortSignal.timeout(200) });
+        if (!res.ok) continue;
+        const body = await res.json().catch(() => ({}));
+        if (body.plugin === "aura-bridge") {
+          DSH_PORT = port;
+          console.log("[dsh] 自动发现插件端口 " + port);
+          return;
+        }
+      } catch {}
+    }
+  } catch (error) {
+    console.log("[dsh] netstat 探测失败:", error instanceof Error ? error.message : error);
+  }
   console.log("[dsh] 未发现 aura-bridge，使用默认 8187");
   DSH_PORT = 8187;
 }
@@ -173,6 +195,17 @@ const server = createServer(async (req, res) => {
   }
   if (path === "/aura/pair/status") {
     return json(res, 200, { mode: SECURITY_MODE, code: SECURITY_MODE === "code" ? currentCode() : undefined, expiresIn: Math.max(0, Math.floor((codeExpiresAt - Date.now()) / 1000)), port: PORT });
+  }
+  if (path === "/aura/detail") {
+    try {
+      const upstream = await fetch("http://127.0.0.1:" + DSH_PORT + path + (url.search || ""), { signal: AbortSignal.timeout(3000) });
+      const body = await upstream.text();
+      res.writeHead(upstream.status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      res.end(body);
+    } catch (error) {
+      json(res, 502, { error: "dsh_plugin_unreachable", detail: String(error) });
+    }
+    return;
   }
   if (path === "/aura/sessions") {
     try {
