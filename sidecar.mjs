@@ -207,6 +207,25 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+  if (path === "/aura/send" || path === "/aura/upload") {
+    try {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = Buffer.concat(chunks);
+      const upstream = await fetch("http://127.0.0.1:" + DSH_PORT + path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        signal: AbortSignal.timeout(30000),
+      });
+      const text = await upstream.text();
+      res.writeHead(upstream.status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      res.end(text);
+    } catch (error) {
+      json(res, 502, { error: "dsh_plugin_unreachable", detail: String(error) });
+    }
+    return;
+  }
   if (path === "/aura/sessions") {
     try {
       const upstream = await fetch("http://127.0.0.1:" + DSH_PORT + "/aura/sessions", { signal: AbortSignal.timeout(3000) });

@@ -2,7 +2,57 @@
 export const name = "aura-bridge";
 
 export function apply(ctx) {
-  ctx.inject(["webServer", "sessions"], (ctx) => {
+  ctx.inject(["webServer", "sessions", "sessionController"], (ctx) => {
+    const readJson = (req, limit = 32 * 1024 * 1024) => new Promise((resolve, reject) => {
+      const chunks = [];
+      let size = 0;
+      req.on("data", (chunk) => { size += chunk.length; if (size > limit) { reject(new Error("body too large")); req.destroy(); return; } chunks.push(chunk); });
+      req.on("end", () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); } catch (error) { reject(error); } });
+      req.on("error", reject);
+    });
+    ctx.effect(() => ctx.webServer.register({
+      kind: "exact",
+      path: "/aura/send",
+      handler: async (req, res) => {
+        if (req.method !== "POST") { send(res, 405, { error: "method" }); return; }
+        try {
+          const body = await readJson(req);
+          const session = ctx.sessions.list().find((item) => item.id === body.id);
+          if (!session) { send(res, 404, { error: "not_found" }); return; }
+          const content = [{ type: "text", text: String(body.text ?? "") }];
+          await ctx.sessionController.prompt(
+            { sessionId: body.id, requestId: "aura-" + Date.now() + "-" + Math.random().toString(36).slice(2), content, mode: "queue" },
+            { kind: "user" },
+          );
+          send(res, 200, { ok: true });
+        } catch (error) {
+          send(res, 500, { error: String(error?.message ?? error) });
+        }
+      },
+    }), "aura-bridge: /aura/send");
+    ctx.effect(() => ctx.webServer.register({
+      kind: "exact",
+      path: "/aura/upload",
+      handler: async (req, res) => {
+        if (req.method !== "POST") { send(res, 405, { error: "method" }); return; }
+        try {
+          const body = await readJson(req);
+          const session = ctx.sessions.list().find((item) => item.id === body.id);
+          if (!session) { send(res, 404, { error: "not_found" }); return; }
+          const cwd = session.header?.cwd;
+          if (!cwd) { send(res, 400, { error: "no_cwd" }); return; }
+          const dir = cwd + "/aura-uploads";
+          const name = String(body.name ?? "upload.bin").replace(/[\\/]/g, "_").slice(0, 120);
+          const target = dir + "/" + Date.now() + "-" + name;
+          const { mkdirSync, writeFileSync } = await import("node:fs");
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(target, Buffer.from(String(body.data ?? ""), "base64"));
+          send(res, 200, { path: target, bytes: Buffer.byteLength(String(body.data ?? ""), "base64") });
+        } catch (error) {
+          send(res, 500, { error: String(error?.message ?? error) });
+        }
+      },
+    }), "aura-bridge: /aura/upload");
     const send = (res, status, body) => {
       res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
       res.end(JSON.stringify(body));
