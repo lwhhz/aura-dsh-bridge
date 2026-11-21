@@ -32,6 +32,19 @@ DSH 的 Web 服务不是匿名可访问的：直接请求 `http://127.0.0.1:8187
 
 在打通前，桥只负责发现与配对（已可用）。
 
+## DSH_AUTH_URL（关键）
+
+DSH Web 需要先带 `?token=` 访问一次拿 cookie。启动 sidecar 时把 `dsh web` 打印的 URL 传进来：
+
+```bash
+DSH_URL=http://127.0.0.1:8187 \
+DSH_AUTH_URL="http://127.0.0.1:8187/?token=<printed-token>" \
+node sidecar.mjs
+```
+
+sidecar 启动时会 GET 该 URL，取 `set-cookie` 并在所有代理请求/升级中注入 Cookie；401 时自动重试一次。
+已验证：注入后通过 sidecar 访问 DSH 返回 200 HTML。
+
 ## 运行
 
 ```bash
