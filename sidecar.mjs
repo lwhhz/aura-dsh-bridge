@@ -22,7 +22,7 @@ import { Bonjour } from "bonjour-service";
 const PORT = Number(process.env.PORT ?? 8765);
 const SECURITY_MODE = process.env.SECURITY_MODE === "token" ? "token" : "code";
 const CODE_TTL = Number(process.env.CODE_TTL ?? 120);
-const DSH_URL_RAW = process.env.DSH_URL ?? "http://127.0.0.1:8187";
+const DSH_URL_RAW = process.env.DSH_URL ?? "auto";
 const DSH_URL_AUTO = DSH_URL_RAW.toLowerCase() === "auto";
 const DSH_URL = new URL(DSH_URL_AUTO ? "http://127.0.0.1:8187" : DSH_URL_RAW);
 const SERVICE_NAME = process.env.SERVICE_NAME ?? "DSH Desktop";
@@ -60,20 +60,27 @@ async function detectDshPort() {
   try {
     const { execFileSync } = await import("node:child_process");
     const out = execFileSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8", windowsHide: true });
-    const ports = [...new Set([...out.matchAll(/127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING/gi)].map((m) => Number(m[1])))]
+    const ports = [...new Set([...out.matchAll(/(?:[\d.]+|\[::1?\]):(\d+)\s+\S+\s+LISTENING/gi)].map((m) => Number(m[1])))]
       .filter((port) => port >= 1024 && port !== PORT);
     console.log("[dsh] 候选监听端口 " + ports.length + " 个");
-    for (const port of ports) {
+    const probe = async (port) => {
       try {
-        const res = await fetch("http://127.0.0.1:" + port + "/aura/health", { signal: AbortSignal.timeout(200) });
-        if (!res.ok) continue;
+        const res = await fetch("http://127.0.0.1:" + port + "/aura/health", { signal: AbortSignal.timeout(150) });
+        if (!res.ok) return 0;
         const body = await res.json().catch(() => ({}));
-        if (body.plugin === "aura-bridge") {
-          DSH_PORT = port;
-          console.log("[dsh] 自动发现插件端口 " + port);
-          return;
-        }
-      } catch {}
+        return body.plugin === "aura-bridge" ? port : 0;
+      } catch { return 0; }
+    };
+    const results = [];
+    for (let i = 0; i < ports.length; i += 16) {
+      const batch = ports.slice(i, i + 16);
+      results.push(...await Promise.all(batch.map(probe)));
+    }
+    const found = results.find((port) => port > 0);
+    if (found) {
+      DSH_PORT = found;
+      console.log("[dsh] 自动发现插件端口 " + found);
+      return;
     }
   } catch (error) {
     console.log("[dsh] netstat 探测失败:", error instanceof Error ? error.message : error);
