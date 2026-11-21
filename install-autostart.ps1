@@ -1,10 +1,13 @@
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $startup = [Environment]::GetFolderPath('Startup')
 $shortcut = Join-Path $startup 'Aura DSH Bridge.lnk'
 $shell = New-Object -ComObject WScript.Shell
 $link = $shell.CreateShortcut($shortcut)
-$link.TargetPath = 'C:\Program Files\nodejs\node.exe'
+$node = Join-Path $here 'node.exe'
+if (-not (Test-Path $node)) { $node = 'node.exe' }
+$link.TargetPath = $node
 $link.Arguments = 'sidecar.mjs'
-$link.WorkingDirectory = 'D:\AI项目\第三方dsapp\dsh-plugin'
+$link.WorkingDirectory = $here
 $link.WindowStyle = 7
 $link.Save()
 Write-Output $shortcut
