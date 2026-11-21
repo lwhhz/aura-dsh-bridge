@@ -1,0 +1,15 @@
+{
+  "name": "aura-dsh-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LAN pairing bridge between Aura mobile client and DSH Desktop",
+  "main": "sidecar.mjs",
+  "license": "MIT",
+  "dependencies": {
+    "bonjour-service": "^1.4.4"
+  },
+  "scripts": {
+    "start": "node sidecar.mjs"
+  }
+}
