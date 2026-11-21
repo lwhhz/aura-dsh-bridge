@@ -33,6 +33,7 @@ export function apply(ctx) {
         const debug = params.get("debug");
         let title = "";
         const items = [];
+        const callNames = new Map();
         for (const event of session.log ?? []) {
           const type = event.type ?? "";
           const data = event.data ?? {};
@@ -44,19 +45,24 @@ export function apply(ctx) {
           }
           if (type === "assistant/message" || type === "system/message" || type === "developer/message") {
             const message = data.message ?? data;
-            const text = blockText(message.content);
+            const blocks = Array.isArray(message.content) ? message.content : [];
+            const reasoning = blocks.filter((b) => b?.type === "reasoning").map((b) => b?.text ?? "").join("").trim();
+            const text = blocks.filter((b) => b?.type !== "reasoning").map((b) => b?.text ?? b?.content ?? "").join("").trim();
+            if (reasoning) items.push({ seq: event.seq, role: "reasoning", text: reasoning.slice(0, 4000) });
             if (text) items.push({ seq: event.seq, role: type.split("/")[0], text });
             continue;
           }
           if (type === "tool/call") {
             const name = data.name ?? data.toolName ?? data.tool?.name ?? data.call?.name ?? "tool";
+            if (data.callId) callNames.set(data.callId, String(name));
             const args = data.arguments ?? data.args ?? data.input ?? data;
             items.push({ seq: event.seq, role: "tool", name: String(name), text: jsonText(args) });
             continue;
           }
           if (type === "tool/result") {
             const text = blockText(data.message?.content) || blockText(data.content) || jsonText(data.result ?? data);
-            items.push({ seq: event.seq, role: "tool_result", name: String(data.name ?? data.toolName ?? ""), text });
+            const resultName = String(data.name ?? data.toolName ?? callNames.get(data.callId) ?? "");
+            items.push({ seq: event.seq, role: "tool_result", name: resultName, text });
             continue;
           }
           if (type === "assistant/attempt" || type.includes("reasoning")) {
