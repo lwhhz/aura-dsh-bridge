@@ -1,0 +1,3 @@
+- insert:
+    - id: aura-bridge
+      name: './plugin/index.mjs'

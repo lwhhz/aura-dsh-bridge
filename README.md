@@ -45,6 +45,30 @@ node sidecar.mjs
 sidecar 启动时会 GET 该 URL，取 `set-cookie` 并在所有代理请求/升级中注入 Cookie；401 时自动重试一次。
 已验证：注入后通过 sidecar 访问 DSH 返回 200 HTML。
 
+## DSH 插件（进程内，推荐）
+
+把 `plugin/` 复制到 DSH profile，再用 patch 插入：
+
+```bash
+cp -r plugin "$USERPROFILE/.dsh/profiles/desktop/plugins/aura-bridge"
+```
+
+`cordis.patch.yml` 追加：
+
+```yaml
+- insert:
+    - id: aura-bridge
+      name: './plugins/aura-bridge/index.mjs'
+```
+
+重启 DSH 后：
+
+```
+GET /aura/sessions              # live 会话
+GET /aura/detail?id=...         # 消息 + 工具调用 + 推理
+GET /aura/detail?id=...&debug=types  # 事件类型统计
+```
+
 ## 运行
 
 ```bash
