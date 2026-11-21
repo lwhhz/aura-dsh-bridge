@@ -32,6 +32,15 @@ let DSH_HOST = DSH_URL.hostname;
 let DSH_PORT = Number(DSH_URL.port || 80);
 
 /** 探测本机 DSH：优先找加载了 aura-bridge 插件的端口（8187..8820）。 */
+async function ensureDshPort() {
+  if (!DSH_URL_AUTO) return;
+  try {
+    const res = await fetch("http://127.0.0.1:" + DSH_PORT + "/aura/health", { signal: AbortSignal.timeout(200) });
+    if (res.ok) return;
+  } catch {}
+  await detectDshPort();
+}
+
 async function detectDshPort() {
   if (!DSH_URL_AUTO) return;
   for (let port = 8187; port <= 8820; port++) {
@@ -196,6 +205,23 @@ const server = createServer(async (req, res) => {
   if (path === "/aura/pair/status") {
     return json(res, 200, { mode: SECURITY_MODE, code: SECURITY_MODE === "code" ? currentCode() : undefined, expiresIn: Math.max(0, Math.floor((codeExpiresAt - Date.now()) / 1000)), port: PORT });
   }
+  await ensureDshPort();
+  if (path === "/aura/file") {
+    if (!authorized(req)) { json(res, 401, { error: "unauthorized" }); return; }
+    const file = url.searchParams.get("path") ?? "";
+    try {
+      const { statSync, createReadStream } = await import("node:fs");
+      const info = statSync(file);
+      if (!info.isFile() || info.size > 15 * 1024 * 1024) { json(res, 400, { error: "bad_file" }); return; }
+      const ext = file.toLowerCase().split(".").pop();
+      const type = ext === "png" ? "image/png" : ext === "jpg" || ext === "jpeg" ? "image/jpeg" : ext === "webp" ? "image/webp" : ext === "gif" ? "image/gif" : "application/octet-stream";
+      res.writeHead(200, { "content-type": type, "cache-control": "no-store", "content-length": String(info.size) });
+      createReadStream(file).pipe(res);
+    } catch (error) {
+      json(res, 404, { error: "not_found", detail: String(error) });
+    }
+    return;
+  }
   if (path === "/aura/detail") {
     try {
       const upstream = await fetch("http://127.0.0.1:" + DSH_PORT + path + (url.search || ""), { signal: AbortSignal.timeout(3000) });
@@ -207,6 +233,7 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+  await ensureDshPort();
   if (path === "/aura/send" || path === "/aura/upload") {
     try {
       const chunks = [];
@@ -226,6 +253,7 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+  await ensureDshPort();
   if (path === "/aura/sessions") {
     try {
       const upstream = await fetch("http://127.0.0.1:" + DSH_PORT + "/aura/sessions", { signal: AbortSignal.timeout(3000) });
@@ -298,6 +326,7 @@ server.listen(PORT, "0.0.0.0", async () => {
     }
   }, 2000).unref();
   console.log("[bridge] UDP 广播 255.255.255.255:8766");
+  if (DSH_URL_AUTO) setInterval(() => { ensureDshPort().catch(() => {}); }, 20000).unref();
   console.log("[bridge] 监听 0.0.0.0:" + PORT);
   console.log("[bridge] 转发到 " + DSH_URL.href);
   console.log("[bridge] 模式: " + SECURITY_MODE + (SECURITY_MODE === "code" ? "，配对码: " + currentCode() : ""));
